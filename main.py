@@ -12,10 +12,11 @@ class Gaussian2DModel:
         device = self.device = torch.device('cuda')
         self.scaling_activation = torch.exp
         self.opacity_activation = torch.sigmoid
-        # self.rgb_activation = torch.sigmoid
-        # self.rgb_inverse_activation = misc.inverse_sigmoid
-        self.rgb_activation = lambda x: x
-        self.rgb_inverse_activation = lambda x: x
+        self.opacity_inverse_activation = torch.sigmoid
+        self.rgb_activation = torch.sigmoid
+        self.rgb_inverse_activation = misc.inverse_sigmoid
+        # self.rgb_activation = lambda x: x
+        # self.rgb_inverse_activation = lambda x: x
         self.rotation_activation = torch.tanh
         self._xy = torch.nn.Parameter(((torch.rand(N, 2) - 0.5) * 5 + torch.rand(N, 1) * 5 + 2).to(device)) # mean
         self._rgb = torch.nn.Parameter(self.rgb_inverse_activation(misc.generate_random_color(N)[torch.randperm(N)].to(device)))
@@ -56,8 +57,9 @@ class Gaussian2DModel:
     def get_rgb(self):
         return self.rgb_activation(self._rgb)
 
-    def set_rgb(self, rgb):
-        self._rgb = self.rgb_inverse_activation(rgb)
+    def set_rgb(self, rgb, eps=1e-4):
+        assert rgb.shape[-1] == 3
+        self._rgb = self.rgb_inverse_activation(torch.clamp(rgb, eps, 1-eps))
 
     @property
     def get_scaling(self):
@@ -74,6 +76,11 @@ class Gaussian2DModel:
     @property
     def get_opacity(self):
         return self.opacity_activation(self._opacity)
+
+    def set_opacity(self, opacity, eps=1e-4):
+        assert opacity.shape[-1] == 1
+        self._opacity = self.opacity_inverse_activation(torch.clamp(opacity, eps, 1-eps))
+
 
     def training_setup(self, lr, iteration):
         lr_xy = lr['xy'] if 'xy' not in self.fixed else 0.
@@ -140,22 +147,38 @@ class Gaussian2DModel:
         line = misc.normal2dir(n)
         bias = misc.get_bias(n, b)
         xs = line[None, ...] * x[..., None] + bias
+        params = {}
         sorted_weights = []
+        Ts = []
+        gs = []
+        alphas = []
         for mu, var, opacity, rgb in zip(mu_, var_, opacity_, rgb_):
-            alpha = opacity * misc.eval_normal_1d(xs, mu, var)
+            g = misc.eval_normal_1d(xs, mu, var)
+            alpha = opacity * g
             y = y + T * alpha * rgb[None, ...]
             weight = alpha * T # (k, 1)
             sorted_weights.append(weight)
+            Ts.append(T)
+            gs.append(g)
+            alphas.append(alpha)
             T = T * (1-alpha)
         sorted_weights = torch.stack(sorted_weights, dim=0)
         weights = torch.zeros_like(sorted_weights)
         weights[sort_idx] = sorted_weights # (N, k, 1)
-        return y, weights
+        Ts = torch.stack(Ts, dim=0)
+        gs = torch.stack(gs, dim=0)
+        alphas = torch.stack(alphas, dim=0)
+
+        params["w"] = weights
+        params["T"] = Ts
+        params["g"] = g
+        params["alpha"] = alpha
+        return y, params
 
 
 if __name__ == "__main__":
     METHOD = "EM"
-    N = 10
+    N = 5
     xmin, xmax = -6, 6
     slope_min, slope_max, slope_N = 1, 3, 25
     slope_list = list(zip(np.linspace(slope_min, slope_max, slope_N), np.linspace(slope_max, slope_min, slope_N), np.random.rand(slope_N) * 4 + 1))
@@ -177,28 +200,28 @@ if __name__ == "__main__":
         gt = False
     else:
         fixed = ['xy', 'scale', 'rotation', 'opacity']
-        gt = True
+        gt = False
     gt_model = Gaussian2DModel(N, gt=gt)
     model = Gaussian2DModel(N, iteration=iteration, lr=lr, fixed=fixed, gt_model=gt_model)
     p_init = Image.fromarray(misc.draw_model(model, None, None, [xmin, xmax])).save("fig/plot_init.png")
     p_init = Image.fromarray(misc.draw_model(gt_model, None, None, [xmin, xmax])).save("fig/plot_init_gt.png")
-    data = []
+    images = []
     ### Data preparation
     with torch.no_grad():
         for i, (n_x, n_y, bias) in enumerate(slope_list):
             normal = torch.tensor([n_x,n_y]).cuda().float()
             normal = normal / torch.norm(normal)
             y, _ = gt_model.render(x, normal, bias)
-            data.append((normal, bias, y))
+            images.append((normal, bias, y))
     if METHOD == "GD":
-        stack = list(range(len(data)))
-        random.shuffle(data)
+        stack = list(range(len(images)))
+        random.shuffle(images)
         pbar = trange(iteration)
         for i in pbar:
             if stack == []:
-                stack = list(range(len(data)))
-                random.shuffle(data)
-            normal, bias, y = data[stack.pop()]
+                stack = list(range(len(images)))
+                random.shuffle(images)
+            normal, bias, y = images[stack.pop()]
             y_pred, _ = model.render(x, normal, bias)
             loss = ((y - y_pred)**2).mean()
             pbar.set_postfix({"loss":loss.item()})
@@ -207,32 +230,33 @@ if __name__ == "__main__":
             model.optimizer.zero_grad()
     elif METHOD == "EM":
         with torch.no_grad():
-            assert set(fixed) == set(['xy', 'scale', 'rotation', 'opacity'])
-            numer, denom = 0, 0
-            for _ in trange(100):
-                for i in trange(len(data), leave=False):
-                    normal, bias, y = data[i] # y : (k, 3)
-                    y_pred, weight = model.render(x, normal, bias) # weight : (N, k, 1)
-                    rgb = model.get_rgb # (N, 3)
-                    N = rgb.shape[0]
-                    denom += (weight * weight).sum(dim=1) # (N, 1)
-                    wc = weight * rgb.unsqueeze(1).repeat(1, weight.shape[1], 1)  # (N, k, 3)
-                    numer += (weight * y[None, ...] + (wc - wc.sum(dim=0, keepdim=True)))).sum(dim=1) # (N, 3)
-                rgb = numer / denom
-                model.set_rgb(torch.clamp(model.get_rgb, 0, 1))
-
-            # for _ in trange(10):
-            #     X = torch.zeros(N, N).cuda()
-            #     Y = torch.zeros(N, 3).cuda()
-            #     for i in trange(len(data), leave=False):
-            #         normal, bias, y = data[i] # y : (k, 3)
-            #         y_pred, weight = model.render(x, normal, bias) # weight : (N, k, 1)
-            #         Y += (weight * y[None, ...].repeat(N, 1, 1)).sum(dim=1)
-            #         X += (weight.permute(1, 0, 2) * weight.permute(1, 2, 0)).sum(dim=0) # (k, N, 1) * (k, 1, N) = (k, N, N) => (N, N)
-            #     result = torch.matmul(torch.inverse(X), Y)
-            #     # if not torch.logical_and(0<=result, result<=1).all():
-            #     #     result = torch.clamp(result, 0, 1)
-            #     model.set_rgb(result)
+            # assert set(fixed) == set(['xy', 'scale', 'rotation', 'opacity'])
+            for _ in trange(10):
+                for i in trange(len(images), leave=False):
+                    normal, bias, y = images[i] # y : (k, 3)
+                    y_pred, params = model.render(x, normal, bias) 
+                    w = params['w'] # (N, k, 1)
+                    T = params['T'] # (N, k, 1)
+                    g = params['g'] # (N, 1)
+                    alpha = params['alpha'] # (N, 1)
+                    
+                    Y_c = (w * y[None, ...].repeat(N, 1, 1)).permute(1, 0, 2).mean(dim=0) # (k, N, 3)
+                    X_c = (w.permute(1, 0, 2) * w.permute(1, 2, 0)).mean(dim=0) # (k, N, N)
+                    
+                    result_rgb = torch.matmul(torch.inverse(X_c), Y_c) # average on sample
+                    model.set_rgb(result_rgb)
+                
+                    # if 'opacity' not in fixed:
+                    #     c = model.get_rgb.unsqueeze(1)
+                    #     c_pad = torch.zeros_like(c)
+                    #     c_pad[:-1] = c[1:]
+                    #     T_pad = torch.zeros_like(T)
+                    #     T_pad[:-1] = T[1:]
+                    #     result = ((T * c - T_pad * c_pad) / (T * g * c))
+                    #     result = result.mean(dim=-1, keepdim=True) # average on rgb
+                    #     result = result.mean(dim=1) # average on sample
+                    #     model.set_opacity(result)
+            # model.set_rgb(torch.clamp(result, 0, 1))
     # eval
     with torch.no_grad():
         for i, (n_x, n_y, bias) in enumerate(slope_list):
