@@ -63,7 +63,7 @@ def eval_normal_1d(x, mu, var):
     # return torch.exp(-0.5 * ((x - mu) / sigma)**2) / (sigma * c)
     return torch.exp(-0.5 * (((x - mu[None, ...])**2).sum(dim=-1) / var.item()))[..., None]
 
-def draw_model(model, normal, bias, plot_xlim):
+def draw_model(model, normal, bias, plot_xlim, title=None):
     xy_ = model.get_xy
     cov_ = model.get_covariance
     rgb_ = model.get_rgb
@@ -96,6 +96,8 @@ def draw_model(model, normal, bias, plot_xlim):
         ax.hlines(0, xmin=xmin, xmax=xmax, colors='black')
         ax.set_xlim([xmin, xmax])
         ax.set_ylim([ymin, ymax])
+        if title is not None:
+            ax.set_title(title)
         if normal is not None and bias is not None:
             X = np.linspace(plot_xlim[0], plot_xlim[1], 100)
             Y = (-normal[0] / normal[1]) * X - (bias / normal[1])
