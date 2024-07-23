@@ -5,6 +5,7 @@ import matplotlib.pyplot as plt
 from matplotlib.patches import Ellipse
 import torch
 import colorsys
+from torch import matmul as mm
 def get_expon_lr_func(
     lr_init, lr_final, lr_delay_steps=0, lr_delay_mult=1.0, max_steps=1000000
 ):
@@ -130,3 +131,37 @@ def generate_random_color(N):
 
 def inverse_sigmoid(x):
     return torch.log(x/(1-x))
+
+def b_extract(x, idx):
+    """
+    x : [I, N, k_I, 1]
+    idx: [I, N]
+    """
+    I, N, k_I, _ = x.shape
+    return torch.gather(x, 1, idx[..., None, None].repeat(1, 1, k_I, 1))
+
+def b_assign(x, idx):
+    """
+    x : [I, N, k_I, 1]
+    idx: [I, N]
+    """
+    I, N, k_I, _ = x.shape
+    y = x.clone()
+    y.scatter_(1, idx[..., None, None].repeat(1, 1, k_I, 1), x)
+    return y
+
+def G(x, A, b, z):
+    N = A.shape[1]
+    x_A_repeat = x[None, ..., None].repeat(3, 1, N, 1) # (3, N, N, 1)
+    x_b_repeat = x[None, ...].repeat(3, 1, 1) # (3, N, 1)
+    return mm(mm(x_A_repeat.permute(0, 1, 3, 2), A), x_A_repeat)[..., 0] + mm(b, x_b_repeat) + z[..., None] # (3, Ni, 1)
+def H(x, A, b):
+    N = A.shape[1]
+    x_A_repeat = x[None, ..., None].repeat(3, 1, N, 1) # (3, N, N, 1)
+    return 2 * mm(A, x_A_repeat) + b[..., None] # (3, N, N, 1)
+def F(x, A, b, z):
+    g_x = G(x, A, b, z)
+    return g_x ** 2 # (3, N, 1)
+def J(x, A, b, z):
+    g_x, h_x = G(x, A, b, z), H(x, A, b)
+    return (2 * g_x.unsqueeze(2) * h_x).sum(dim=1) # (3, Nj, 1)
