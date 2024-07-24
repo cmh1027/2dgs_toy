@@ -4,7 +4,8 @@ import torchvision
 import matplotlib.pyplot as plt
 from matplotlib.patches import Ellipse
 import torch
-import colorsys
+import random
+import numpy as np
 from torch import matmul as mm
 def get_expon_lr_func(
     lr_init, lr_final, lr_delay_steps=0, lr_delay_mult=1.0, max_steps=1000000
@@ -42,14 +43,17 @@ def get_expon_lr_func(
     return helper
 
 def normal2dir(n):
-    line = torch.tensor([n[1], -n[0]]).to(n.device)
+    if type(n) is np.ndarray:
+        line = np.array([n[1], -n[0]])
+    else:
+        line = torch.tensor([n[1], -n[0]]).to(n.device)
     return line
 
 def get_bias(n, b):
-    bias = torch.tensor([0., -b/n[1]]).to(n.device)
+    bias = n * b
     return bias
 
-def line2image(vec, name):
+def line2image(vec):
     N = len(vec)
     vec = vec.view(1, N, 3).repeat(N, 1, 1).permute(2, 0, 1)
     return np.array(torchvision.transforms.functional.to_pil_image(vec))
@@ -69,11 +73,14 @@ def draw_model(model, normal, bias, plot_xlim, title=None):
     cov_ = model.get_covariance
     rgb_ = model.get_rgb
     opacity_ = model.get_opacity
-    xmin, xmax = -10, 15
-    ymin, ymax = -10, 15
+    M = 35
+    xmin, xmax = -M, M
+    ymin, ymax = -M, M
     fig, ax = plt.subplots(subplot_kw={'aspect': 'equal'})
     if normal is not None:
         normal = normal.cpu().detach().numpy()
+    if bias is not None:
+        bias = bias.cpu().detach().numpy()
     for mu, cov, rgb, opacity in zip(xy_, cov_, rgb_, opacity_):
         mu = mu.cpu().detach().numpy()
         cov = cov.cpu().detach().numpy()
@@ -93,16 +100,18 @@ def draw_model(model, normal, bias, plot_xlim, title=None):
         ax.add_patch(ellipse)
 
         # Plot the contour plot
-        ax.vlines(0, ymin=ymin, ymax=ymax, colors='black')
-        ax.hlines(0, xmin=xmin, xmax=xmax, colors='black')
         ax.set_xlim([xmin, xmax])
         ax.set_ylim([ymin, ymax])
         if title is not None:
             ax.set_title(title)
-        if normal is not None and bias is not None:
-            X = np.linspace(plot_xlim[0], plot_xlim[1], 100)
-            Y = (-normal[0] / normal[1]) * X - (bias / normal[1])
-            plt.plot(X, Y, color='black')
+
+    if normal is not None and bias is not None:
+        coef = np.linspace(plot_xlim[0], plot_xlim[1], 100) 
+        line = normal2dir(normal)
+        bias = get_bias(normal, bias)
+        xs = line[None, ...] * coef[..., None] + bias
+        ax.plot(xs[..., 0], xs[..., 1], color='black')
+    
     fig.canvas.draw()
     image_from_plot = np.frombuffer(fig.canvas.tostring_rgb(), dtype=np.uint8)
     image_from_plot = image_from_plot.reshape(fig.canvas.get_width_height()[::-1] + (3,))
@@ -165,3 +174,26 @@ def F(x, A, b, z):
 def J(x, A, b, z):
     g_x, h_x = G(x, A, b, z), H(x, A, b)
     return (2 * g_x.unsqueeze(2) * h_x).sum(dim=1) # (3, Nj, 1)
+
+def set_seed(seed):
+    torch.manual_seed(seed)
+    torch.cuda.manual_seed(seed)
+    torch.cuda.manual_seed_all(seed)
+    np.random.seed(seed)
+    torch.backends.cudnn.benchmark = False
+    torch.backends.cudnn.deterministic = True
+    random.seed(seed)
+
+def back_cull_mask(xy, normal, bias):
+    """
+    xy : (N, 2)
+    normal : (N, 2)
+    bias : (1,)
+    """
+    N = xy.shape[0]
+    q1 = (normal[..., 0] >= 0) & (normal[..., 1] > 0)
+    q2 = (normal[..., 0] < 0) & (normal[..., 1] >= 0)
+    q3 = (normal[..., 0] <= 0) & (normal[..., 1] < 0)
+    q4 = (normal[..., 0] > 0) & (normal[..., 1] <= 0)
+    evaluation = torch.bmm(xy.view(N, 1, 2), normal.view(N, 2, 1)).squeeze() + bias
+    pos_eval_mask, neg_eval_mask = evaluation > 0, evaluation < 0

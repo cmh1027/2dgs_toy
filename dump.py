@@ -11,6 +11,37 @@
     # result = torch.matmul(torch.inverse(X), Y)
 
 
+    # elif METHOD == "BFGS":
+    #     stack = list(range(len(images)))
+    #     random.shuffle(images)
+    #     optimizers = {}
+    #     for param in ['rgb', 'xy', 'scale', 'rotation', 'opacity']:
+    #         if param not in fixed:
+    #             optimizer = torch.optim.LBFGS([getattr(model, "_" + param)], lr=1, max_iter=50000, max_eval=50000, history_size=50)
+    #             optimizers[param] = optimizer
+
+    #     for i in trange(100):
+    #         for param in ['rgb', 'xy', 'scale', 'rotation', 'opacity']:
+    #             if param in fixed: continue
+    #             optimizers[param].zero_grad()
+    #             def closure():
+    #                 ys, y_preds, = [], []
+    #                 for i in range(len(images)):
+    #                     normal, bias, y = images[i]
+    #                     y_pred, _ = model.render(data, normal, bias)
+    #                     ys.append(y)
+    #                     y_preds.append(y_pred)
+    #                 y = torch.cat(ys, dim=0)
+    #                 y_pred = torch.cat(y_preds, dim=0)
+    #                 loss = ((y - y_pred)**2).mean()
+    #                 loss.backward()
+    #                 return loss
+    #             optimizers[param].step(closure)
+
+
+    # elif METHOD == "BFGS":
+    #     fixed = []
+    #     gt = True
 
 
             # def g(x):

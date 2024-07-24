@@ -11,10 +11,14 @@ import copy
 from torch import matmul as mm
 from icecream import ic
 import minhyuk
+import sys
+import time
+import argparse
+
 class Gaussian2DModel:
     def __init__(self, N, iteration=None, lr=None, gt=False, fixed=[], gt_model=None):
         device = self.device = torch.device('cuda')
-        self.scaling_activation = torch.exp
+        self.scale_activation = torch.exp
         self.opacity_activation = torch.sigmoid
         self.opacity_inverse_activation = misc.inverse_sigmoid
         self.rgb_activation = torch.sigmoid
@@ -22,29 +26,29 @@ class Gaussian2DModel:
         # self.rgb_activation = lambda x: x
         # self.rgb_inverse_activation = lambda x: x
         self.rotation_activation = torch.tanh
-        self._xy = torch.nn.Parameter(((torch.rand(N, 2) - 0.5) * 5 + torch.rand(N, 1) * 5 + 2).to(device)) # mean
+        self._xy = torch.nn.Parameter(((torch.rand(N, 2) - 0.5) * 10 + 3).to(device)) # mean
         self._rgb = torch.nn.Parameter(self.rgb_inverse_activation(misc.generate_random_color(N)[torch.randperm(N)].to(device)))
-        self._scaling = torch.nn.Parameter(torch.rand(N, 2).to(device) + 0.2)
-        self._rotation = torch.nn.Parameter(torch.zeros(N, 1).to(device)) # unlike quaternion in 3D, theta is enough
-        self._opacity = torch.nn.Parameter((torch.rand(N, 1).to(device)) * 5)
+        self._scale = torch.nn.Parameter(torch.rand(N, 2).to(device) + 0.2)
+        self._rotation = torch.nn.Parameter((torch.rand(N, 1).to(device) - 0.5) * 2 * torch.pi) # unlike quaternion in 3D, theta is enough
+        self._opacity = torch.nn.Parameter((torch.rand(N, 1).to(device) - 0.5) * 2)
         self.fixed = fixed
         if gt:
             if N == 2:
                 self._xy = torch.nn.Parameter(torch.tensor([[2., 5.], [5., 2.]]).to(device))
                 self._rgb = torch.nn.Parameter(self.rgb_inverse_activation(torch.tensor([[0.1, 0.9, 0.9], [0.9, 0.9, 0.1]])).to(device))
-                self._scaling = torch.nn.Parameter(torch.tensor([[0.4, 1.2], [0.9, 1.1]]).to(device))
+                self._scale = torch.nn.Parameter(torch.tensor([[0.4, 1.2], [0.9, 1.1]]).to(device))
                 self._rotation = torch.nn.Parameter(torch.tensor([[1.3], [-1.6]]).to(device)) 
                 self._opacity = torch.nn.Parameter(torch.tensor([[3.0], [-1.0]]).to(device))
             elif N == 3:
                 self._xy = torch.nn.Parameter(torch.tensor([[3., 3.], [6., 3.], [0.2, 6.]]).to(device))
                 self._rgb = torch.nn.Parameter(self.rgb_inverse_activation(torch.tensor([[0.9, 0.1, 0.1], [0.1, 0.9, 0.1], [0.1, 0.1, 0.9]])).to(device))
-                self._scaling = torch.nn.Parameter(torch.tensor([[0.5, 0.9], [0.4, 1.2], [0.9, 1.1]]).to(device))
+                self._scale = torch.nn.Parameter(torch.tensor([[0.5, 0.9], [0.4, 1.2], [0.9, 1.1]]).to(device))
                 self._rotation = torch.nn.Parameter(torch.tensor([[1.3], [-1.6], [2.2]]).to(device)) 
                 self._opacity = torch.nn.Parameter(torch.tensor([[5.0], [3.0], [-1.0]]).to(device))
             elif N == 4:
                 self._xy = torch.nn.Parameter(torch.tensor([[2., 2.], [8., 3.], [2, 6.], [6, 2.]]).to(device))
-                self._rgb = torch.nn.Parameter(self.rgb_inverse_activation(torch.tensor([[0.9, 0.1, 0.1], [0.1, 0.9, 0.1], [0.1, 0.1, 0.9], [0.9, 0.1, 0.5]])).to(device))
-                self._scaling = torch.nn.Parameter(torch.tensor([[0.5, 0.9], [0.4, 1.2], [0.9, 1.1], [0.7, 0.3]]).to(device))
+                self._rgb = torch.nn.Parameter(self.rgb_inverse_activation(torch.tensor([[0.9, 0.1, 0.1], [0.1, 0.9, 0.1], [0.1, 0.1, 0.9], [0.9, 0.1, 0.9]])).to(device))
+                self._scale = torch.nn.Parameter(torch.tensor([[0.5, 0.9], [0.4, 1.2], [0.9, 1.1], [0.7, 0.3]]).to(device))
                 self._rotation = torch.nn.Parameter(torch.tensor([[1.3], [-1.6], [2.2], [-0.3]]).to(device)) 
                 self._opacity = torch.nn.Parameter(torch.tensor([[3.0], [1.0], [-1.0], [2.0]]).to(device))   
             else:
@@ -57,7 +61,7 @@ class Gaussian2DModel:
             if "xy" in fixed:
                 self._xy = copy.deepcopy(gt_model._xy)
             if "scale" in fixed:
-                self._scaling = copy.deepcopy(gt_model._scaling)
+                self._scale = copy.deepcopy(gt_model._scale)
             if "rotation" in fixed:
                 self._rotation = copy.deepcopy(gt_model._rotation)
             if "opacity" in fixed:
@@ -74,8 +78,8 @@ class Gaussian2DModel:
         self._rgb = self.rgb_inverse_activation(torch.clamp(rgb, eps, 1-eps))
 
     @property
-    def get_scaling(self):
-        return self.scaling_activation(self._scaling)
+    def get_scale(self):
+        return self.scale_activation(self._scale)
 
     @property
     def get_rotation(self):
@@ -103,7 +107,7 @@ class Gaussian2DModel:
             {'params': [self._xy], 'lr': lr_xy, "name": "xy"},
             {'params': [self._rgb], 'lr': lr_rgb, "name": "rgb"},
             {'params': [self._opacity], 'lr': lr_opacity, "name": "opacity"},
-            {'params': [self._scaling], 'lr': lr_scale, "name": "scaling"},
+            {'params': [self._scale], 'lr': lr_scale, "name": "scale"},
             {'params': [self._rotation], 'lr': lr_rotation, "name": "rotation"},
         ]
 
@@ -118,7 +122,7 @@ class Gaussian2DModel:
         theta = self.get_rotation
         N = theta.shape[0]
         R = torch.cat([torch.cos(theta), -torch.sin(theta), torch.sin(theta), torch.cos(theta)], dim=-1).reshape(N, 2, 2).to(self.device)
-        S = torch.diag_embed(self.get_scaling).to(self.device)
+        S = torch.diag_embed(self.get_scale).to(self.device)
         RS = torch.bmm(R, S)
         return torch.bmm(RS, RS.permute(0, 2, 1))
 
@@ -200,30 +204,40 @@ class Gaussian2DModel:
 
 
 if __name__ == "__main__":
-    METHOD = "EM"
-    N = 4
+    parser = argparse.ArgumentParser()
+    parser.add_argument('--seed', '-s', type=int, default=2024) 
+    parser.add_argument('--method', '-m', type=str, required=True) 
+    parser.add_argument('--iteration', '-i', type=int, default=1000) 
+    args = parser.parse_args() 
+    misc.set_seed(args.seed)
+    METHOD = args.method.upper()
+    N = 9
     xmin, xmax = -6, 6
     slope_min, slope_max, slope_N = 1, 3, 25
     slope_list = list(zip(np.linspace(slope_min, slope_max, slope_N), np.linspace(slope_max, slope_min, slope_N), np.random.rand(slope_N) * 4 + 1))
     # slope_list.extend(list(zip(np.linspace(slope_min, slope_max, slope_N), np.linspace(slope_max, slope_min, slope_N), -np.random.rand(slope_N) * 2 - 10)))
     data = torch.arange(xmin, xmax, 0.05).cuda()
-    iteration = 1000
+    iteration = args.iteration
     lr = {
         'xy': 0.1,
-        'rgb': 0.1,
+        'rgb': 0.01,
         'opacity': 0.05,
         'scale': 0.1,
         'rotation': 0.5
     }
     
     ### fixed ['rgb', 'xy', 'scale', 'rotation' 'opacity']
-    # fixed = ['xy', 'scale', 'rotation', 'opacity']
     if METHOD == "GD":
+        fixed = []
+        gt = False
+    elif METHOD == "BFGS":
+        fixed = ['xy', 'scale', 'rotation']
+        gt = False
+    elif METHOD == "EM":
         fixed = ['xy', 'scale', 'rotation']
         gt = True
     else:
-        fixed = ['xy', 'scale', 'rotation', 'rgb']
-        gt = True
+        raise NotImplementedError
     gt_model = Gaussian2DModel(N, gt=gt)
     model = Gaussian2DModel(N, iteration=iteration, lr=lr, fixed=fixed, gt_model=gt_model)
     p_init = misc.draw_model(model, None, None, [xmin, xmax], "init")
@@ -241,6 +255,7 @@ if __name__ == "__main__":
         stack = list(range(len(images)))
         random.shuffle(images)
         pbar = trange(iteration)
+        start = time.time()
         for i in pbar:
             if stack == []:
                 stack = list(range(len(images)))
@@ -252,6 +267,51 @@ if __name__ == "__main__":
             loss.backward()
             model.optimizer.step()
             model.optimizer.zero_grad()
+        print(time.time() - start)
+            
+    elif METHOD == "BFGS":
+        optimizers = {}
+        for param in ['xy', 'scale', 'rotation', 'opacity']:
+            if param not in fixed:
+                optimizer = torch.optim.LBFGS([getattr(model, "_" + param)], max_iter=10, tolerance_grad=1e-4, tolerance_change=1e-4)
+                optimizers[param] = optimizer
+        start = time.time()
+        for i in trange(10):
+            if 'rgb' not in fixed:
+                with torch.no_grad():
+                    ys, ws = [], []
+                    for i in range(len(images)):
+                        normal, bias, y = images[i] # y : (k, 3)
+                        ys.append(y)
+                        _, params = model.render(data, normal, bias) 
+                        ws.append(params['w']) # (N, k, 1) 
+                    y = torch.cat(ys, dim=0)
+                    w = torch.cat(ws, dim=1)
+                    if 'rgb' not in fixed:
+                        Y_c = (w * y[None, ...].repeat(N, 1, 1)).permute(1, 0, 2).mean(dim=0) # (k, N, 3)
+                        X_c = (w.permute(1, 0, 2) * w.permute(1, 2, 0)).mean(dim=0) # (k, N, N)
+                        result_rgb = mm(torch.inverse(X_c), Y_c) 
+                        model.set_rgb(result_rgb)
+
+            for param in ['xy', 'scale', 'rotation', 'opacity']:
+                if param in fixed: continue
+                optimizers[param].zero_grad()
+                def closure():
+                    ys, y_preds, = [], []
+                    for i in range(len(images)):
+                        normal, bias, y = images[i]
+                        y_pred, _ = model.render(data, normal, bias)
+                        ys.append(y)
+                        y_preds.append(y_pred)
+                    y = torch.cat(ys, dim=0)
+                    y_pred = torch.cat(y_preds, dim=0)
+                    loss = ((y - y_pred)**2).mean()
+                    loss.backward()
+                    return loss
+                optimizers[param].step(closure)
+
+        print(time.time() - start)
+
     elif METHOD == "EM":
         iteration = 10 if len(fixed) <= 3 else 1
         optim_params = list(set(lr.keys()).difference(set(fixed)))
@@ -398,4 +458,5 @@ if __name__ == "__main__":
             r = np.zeros((h, 2*w+10, 3), dtype=np.uint8)
             r[:, 0:w], r[:, w+10:] = r_pred, r_gt
             Image.fromarray(r).save(f"fig/render{'%03d' % i}.png")
+
 
