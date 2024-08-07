@@ -64,16 +64,20 @@ def eval_normal_1d(x, mu, var):
     mu : (2,)
     var : (1,)
     """
-    c = 2.5066282 # sqrt(2pi)
     # return torch.exp(-0.5 * ((x - mu) / sigma)**2) / (sigma * c)
-    return torch.exp(-0.5 * (((x - mu[None, ...])**2).sum(dim=-1) / var.item()))[..., None]
+    g = -0.5 * (((x - mu[None, ...])**2).sum(dim=-1) / var.item())
+    e = torch.exp(g)[..., None]
+    return e
+    # e_trim = e.clone()
+    # e_trim[e < 0.3678794] = 0.
+    # return e_trim 
 
-def draw_model(model, normal, bias, plot_xlim, title=None):
+def draw_model(model, normal, bias, plot_xlim, title=None, plot_border=35):
     xy_ = model.get_xy
     cov_ = model.get_covariance
     rgb_ = model.get_rgb
     opacity_ = model.get_opacity
-    M = 35
+    M = plot_border
     xmin, xmax = -M, M
     ymin, ymax = -M, M
     fig, ax = plt.subplots(subplot_kw={'aspect': 'equal'})
@@ -119,7 +123,7 @@ def draw_model(model, normal, bias, plot_xlim, title=None):
     return image_from_plot
 
 def generate_random_color(N):
-    h = torch.clamp(torch.linspace(0.2, 0.8, N) + (torch.rand(N) - 0.5) * 0.1, 0, 1)[..., None]
+    h = torch.clamp(torch.linspace(0.0, 0.8, N) + (torch.rand(N) - 0.5) * 0.1, 0, 1)[..., None]
     s = torch.rand(N, 1) * 0.1 + 0.9  # Saturation: 0.5 to 1.0 for vivid colors
     v = torch.rand(N, 1) * 0.1 + 0.9  # Brightness: 0.5 to 1.0 for brighter colors
     i = (h*6.0).to(torch.uint8)
@@ -184,16 +188,37 @@ def set_seed(seed):
     torch.backends.cudnn.deterministic = True
     random.seed(seed)
 
-def back_cull_mask(xy, normal, bias):
-    """
-    xy : (N, 2)
-    normal : (N, 2)
-    bias : (1,)
-    """
-    N = xy.shape[0]
-    q1 = (normal[..., 0] >= 0) & (normal[..., 1] > 0)
-    q2 = (normal[..., 0] < 0) & (normal[..., 1] >= 0)
-    q3 = (normal[..., 0] <= 0) & (normal[..., 1] < 0)
-    q4 = (normal[..., 0] > 0) & (normal[..., 1] <= 0)
-    evaluation = torch.bmm(xy.view(N, 1, 2), normal.view(N, 2, 1)).squeeze() + bias
-    pos_eval_mask, neg_eval_mask = evaluation > 0, evaluation < 0
+# def back_cull_mask(xy, normal, bias):
+#     """
+#     xy : (N, 2)
+#     normal : (N, 2)
+#     bias : (1,)
+#     """
+#     N = xy.shape[0]
+#     q1 = (normal[..., 0] >= 0) & (normal[..., 1] > 0)
+#     q2 = (normal[..., 0] < 0) & (normal[..., 1] >= 0)
+#     q3 = (normal[..., 0] <= 0) & (normal[..., 1] < 0)
+#     q4 = (normal[..., 0] > 0) & (normal[..., 1] <= 0)
+#     evaluation = torch.bmm(xy.view(N, 1, 2), normal.view(N, 2, 1)).squeeze() + bias
+#     pos_eval_mask, neg_eval_mask = evaluation > 0, evaluation < 0
+
+def concat_dictlist(l):
+    result = l[0]
+    for d in l[1:]:
+        for key, value in result.items():
+            if len(value.shape) == 1:
+                result[key] = torch.cat([value, d[key]], dim=0)
+            elif len(value.shape) == 2:
+
+                result[key] = torch.cat([value, d[key]], dim=1)
+
+            else:
+                raise NotImplementedError
+
+    return result
+
+def mask_params(params, mask, sort_idx, perm):
+    for key, value in params.items():
+        if key in ['T', 'g', 'w', 'alpha']: 
+            params[key] = value[mask][sort_idx].permute(*perm)
+    return params

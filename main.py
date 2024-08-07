@@ -16,7 +16,7 @@ import time
 import argparse
 
 class Gaussian2DModel:
-    def __init__(self, N, iteration=None, lr=None, gt=False, fixed=[], gt_model=None):
+    def __init__(self, N, iteration=None, lr=None, gt=False, fixed=[], noise=[], gt_model=None):
         device = self.device = torch.device('cuda')
         self.scale_activation = torch.exp
         self.opacity_activation = torch.sigmoid
@@ -54,7 +54,7 @@ class Gaussian2DModel:
             else:
                 raise NotImplementedError
         else:
-            if fixed != []:
+            if fixed != [] or noise != []:
                 assert gt_model is not None
             if "rgb" in fixed:
                 self._rgb = copy.deepcopy(gt_model._rgb)
@@ -66,6 +66,9 @@ class Gaussian2DModel:
                 self._rotation = copy.deepcopy(gt_model._rotation)
             if "opacity" in fixed:
                 self._opacity = copy.deepcopy(gt_model._opacity)
+
+            if "xy" in noise:
+                self._xy = copy.deepcopy(gt_model._xy) + (torch.rand_like(gt_model._xy) * 5)
         if lr is not None and iteration is not None:
             self.training_setup(lr, iteration)
 
@@ -229,6 +232,7 @@ if __name__ == "__main__":
     ### fixed ['rgb', 'xy', 'scale', 'rotation' 'opacity']
     if METHOD == "GD":
         fixed = []
+        noise = ['xy']
         gt = False
     elif METHOD == "BFGS":
         fixed = ['xy', 'scale', 'rotation']
@@ -239,7 +243,7 @@ if __name__ == "__main__":
     else:
         raise NotImplementedError
     gt_model = Gaussian2DModel(N, gt=gt)
-    model = Gaussian2DModel(N, iteration=iteration, lr=lr, fixed=fixed, gt_model=gt_model)
+    model = Gaussian2DModel(N, iteration=iteration, lr=lr, fixed=fixed, noise=noise, gt_model=gt_model)
     p_init = misc.draw_model(model, None, None, [xmin, xmax], "init")
     Image.fromarray(misc.draw_model(model, None, None, [xmin, xmax])).save("fig/plot_init.png")
     Image.fromarray(misc.draw_model(gt_model, None, None, [xmin, xmax])).save("fig/plot_init_gt.png")

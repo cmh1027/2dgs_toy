@@ -159,3 +159,20 @@
 
                 # result_opacity = x.permute(1, 0)
                 # model.set_opacity(result_opacity)
+
+
+
+            # y_ = y.permute(1, 0) # (3, k)
+            # c_ = model.get_rgb.permute(1, 0) # (3, N)
+            # g_ = params['g'].permute(2, 0, 1) # (1, N, k)
+            # T_ = params['T'].permute(2, 0, 1)
+            # P = T_ * g_ * c_.unsqueeze(2) # (3, Nj, k)
+            # o = model.get_opacity.permute(1, 0) # (1, N)
+            # dT_do = -T_.unsqueeze(1) * (g_ / (1 - g_ * o[..., None])).unsqueeze(2) # (1, Ni, Nj, k)
+            # dT_do = dT_do.permute(0, 3, 1, 2).triu(diagonal=1).permute(0, 2, 3, 1) # (1, Ni, Nj, k)
+            # Q = dT_do * g_.unsqueeze(2) * c_[..., None, None] # (3, Ni, Nj, k)
+            # P_repeat = P.unsqueeze(1).repeat(1, N, 1, 1) # (3, Ni, Nj, k)
+            # A = 0.5 * (mm(P_repeat, Q.permute(0, 1, 3, 2)) + mm(Q, P_repeat.permute(0, 1, 3, 2))) # (3, Ni, Nj, Nj)
+            # b = mm(P, P.permute(0, 2, 1)) - (y_[:, None, None, :] * Q).sum(dim=-1) # (3, Ni, Nj)
+            # z = -(y_.unsqueeze(1) * T_ * g_ * c_.unsqueeze(2)).sum(-1) # (3, Ni)
+            # ic(A[0, 0].mean(), b[0, 0].mean())
